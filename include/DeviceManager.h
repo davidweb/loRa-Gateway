@@ -9,6 +9,7 @@ public:
     void init();
     int8_t registerDevice(const char* mac, const char* type);
     bool isDeviceRegistered(uint8_t nodeId);
+    bool isValidMessageCounter(uint8_t nodeId, uint32_t counter);
     void updateDeviceSignalInfo(uint8_t nodeId, float rssi, float snr);
     const char* getDeviceName(uint8_t nodeId);
     uint8_t findNodeIdByName(const char* name);

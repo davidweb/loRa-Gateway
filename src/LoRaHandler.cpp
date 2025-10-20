@@ -2,6 +2,7 @@
 #include "config.h"
 #include "types.h"
 #include "DeviceManager.h"
+#include "helpers.h"
 #include <RadioLib.h>
 #include <ArduinoJson.h>
 #include <AESLib.h>
@@ -24,20 +25,6 @@ void IRAM_ATTR loraInterrupt() {
     if (xHigherPriorityTaskWoken == pdTRUE) {
         portYIELD_FROM_ISR();
     }
-}
-
-uint32_t calculateCRC32(const uint8_t *data, size_t length) {
-    uint32_t crc = 0xffffffff;
-    while (length--) {
-        uint8_t c = *data++;
-        for (uint32_t i = 0x80; i > 0; i >>= 1) {
-            bool bit = crc & 0x80000000;
-            if (c & i) { bit = !bit; }
-            crc <<= 1;
-            if (bit) { crc ^= 0x04c11db7; }
-        }
-    }
-    return crc;
 }
 
 void taskLoRaHandler(void *pvParameters) {
@@ -104,73 +91,86 @@ void taskLoRaHandler(void *pvParameters) {
 
                 if (error) {
                     Serial.printf("LORA RX: JSON parsing failed! Msg: %s\n", rxStr.c_str());
-                } else {
-                    if (!rxDoc[LORA_KEY_PAYLOAD].isNull()) {
-                        JsonObject payload = rxDoc[LORA_KEY_PAYLOAD];
-                        uint32_t receivedCrc = rxDoc[LORA_KEY_CRC];
-                        String payloadStr;
-                        serializeJson(payload, payloadStr);
-                        uint32_t calculatedCrc = calculateCRC32((const uint8_t*)payloadStr.c_str(), payloadStr.length());
+                    continue; // Skip this message
+                }
 
-                        if (receivedCrc == calculatedCrc && strcmp(payload[LORA_KEY_TYPE], LORA_MSG_TYPE_JOIN_REQUEST) == 0) {
-                             if (strcmp(payload[LORA_KEY_SECRET], LORA_SECRET_KEY) == 0) {
-                                int8_t newId = deviceManager.registerDevice(payload[LORA_KEY_MAC], payload[LORA_KEY_DEV_TYPE]);
-                                if (newId > 0) {
-                                    txDoc.clear();
-                                    JsonObject p = txDoc.createNestedObject(LORA_KEY_PAYLOAD);
-                                    p[LORA_KEY_TYPE] = LORA_MSG_TYPE_JOIN_ACCEPT;
-                                    p[LORA_KEY_NODE_ID] = newId;
-                                    String responsePayload; serializeJson(p, responsePayload);
-                                    txDoc[LORA_KEY_CRC] = calculateCRC32((const uint8_t*)responsePayload.c_str(), responsePayload.length());
-                                    String response; serializeJson(txDoc, response);
-                                    radio.transmit(response);
-                                    Serial.printf("LORA TX -> JOIN_ACCEPT sent for Node %d\n", newId);
-                                    SystemEvent event = { NEW_DEVICE_REGISTERED, (uint8_t)newId };
-                                    xQueueSend(systemQueue, &event, 0);
-                                }
-                            }
+                if (rxDoc[LORA_KEY_PAYLOAD].isNull() || rxDoc[LORA_KEY_CRC].isNull()) {
+                    Serial.printf("LORA RX: Invalid message format. Msg: %s\n", rxStr.c_str());
+                    continue;
+                }
+
+                String encryptedPayload = rxDoc[LORA_KEY_PAYLOAD];
+                String decryptedPayload = decrypt_payload(encryptedPayload);
+
+                if (decryptedPayload.length() == 0) {
+                    Serial.println("LORA RX: Decryption failed!");
+                    continue;
+                }
+
+                uint32_t receivedCrc = rxDoc[LORA_KEY_CRC];
+                uint32_t calculatedCrc = calculateCRC32((const uint8_t*)decryptedPayload.c_str(), decryptedPayload.length());
+
+                if (receivedCrc != calculatedCrc) {
+                    Serial.printf("LORA RX: CRC mismatch! RX: %u, CALC: %u. Payload: %s\n", receivedCrc, calculatedCrc, decryptedPayload.c_str());
+                    continue;
+                }
+
+                JsonDocument decryptedDoc;
+                if (deserializeJson(decryptedDoc, decryptedPayload) != DeserializationError::Ok) {
+                    Serial.printf("LORA RX: Decrypted payload JSON parsing failed! Payload: %s\n", decryptedPayload.c_str());
+                    continue;
+                }
+
+                const char* type = decryptedDoc[LORA_KEY_TYPE];
+                Serial.printf("LORA RX Decrypted: Type=%s\n", type);
+
+                if (strcmp(type, LORA_MSG_TYPE_JOIN_REQUEST) == 0) {
+                    int8_t newId = deviceManager.registerDevice(decryptedDoc[LORA_KEY_MAC], decryptedDoc[LORA_KEY_DEV_TYPE]);
+                    if (newId > 0) {
+                        JsonDocument responseDoc;
+                        JsonObject p = responseDoc[LORA_KEY_PAYLOAD].to<JsonObject>();
+                        p[LORA_KEY_TYPE] = LORA_MSG_TYPE_JOIN_ACCEPT;
+                        p[LORA_KEY_NODE_ID] = newId;
+
+                        String responsePayloadStr;
+                        serializeJson(p, responsePayloadStr);
+
+                        String encryptedResponse = encrypt_payload(responsePayloadStr);
+                        txDoc.clear();
+                        txDoc[LORA_KEY_PAYLOAD] = encryptedResponse;
+                        txDoc[LORA_KEY_CRC] = calculateCRC32((const uint8_t*)responsePayloadStr.c_str(), responsePayloadStr.length());
+
+                        String response;
+                        serializeJson(txDoc, response);
+                        radio.transmit(response);
+                        Serial.printf("LORA TX -> JOIN_ACCEPT (encrypted) sent for Node %d\n", newId);
+
+                        SystemEvent event = { NEW_DEVICE_REGISTERED, (uint8_t)newId };
+                        xQueueSend(systemQueue, &event, 0);
+                    }
+                } else if (waitingForAck && strcmp(type, LORA_MSG_TYPE_ACK) == 0) {
+                    uint16_t ackMsgId = decryptedDoc[LORA_KEY_MSG_ID];
+                    if (ackMsgId == pendingAckCmd.msgId) {
+                        Serial.printf("LORA ACK OK for msgId %d\n", ackMsgId);
+                        waitingForAck = false;
+                    }
+                } else if (strcmp(type, LORA_MSG_TYPE_TELEMETRY) == 0) {
+                    uint8_t nodeId = decryptedDoc[LORA_KEY_NODE_ID];
+                    uint32_t msgCtr = decryptedDoc[LORA_KEY_MSG_COUNTER];
+
+                    if (deviceManager.isDeviceRegistered(nodeId) && deviceManager.isValidMessageCounter(nodeId, msgCtr)) {
+                        float rssi = radio.getRSSI();
+                        float snr = radio.getSNR();
+                        deviceManager.updateDeviceSignalInfo(nodeId, rssi, snr);
+
+                        JsonObject data = decryptedDoc[LORA_KEY_DATA];
+                        if (!data.isNull()) {
+                            data["rssi"] = rssi;
+                            data["snr"] = snr;
                         }
-                    } else if (!rxDoc[LORA_KEY_DATA].isNull()) {
-                        uint32_t receivedCrc = rxDoc[LORA_KEY_CRC];
-                        String encryptedData = rxDoc[LORA_KEY_DATA];
-                        uint32_t calculatedCrc = calculateCRC32((const uint8_t*)encryptedData.c_str(), encryptedData.length());
 
-                        if(receivedCrc != calculatedCrc){
-                            Serial.printf("LORA RX: CRC mismatch! RX: %u, CALC: %u\n", receivedCrc, calculatedCrc);
-                        } else {
-                            String decryptedStr = decrypt_payload(encryptedData);
-                            JsonDocument decryptedDoc;
-                            deserializeJson(decryptedDoc, decryptedStr);
-
-                            const char* type = decryptedDoc[LORA_KEY_TYPE];
-                            Serial.printf("LORA RX Decrypted: Type=%s\n", type);
-
-                            if (waitingForAck && strcmp(type, LORA_MSG_TYPE_ACK) == 0) {
-                                uint16_t ackMsgId = decryptedDoc[LORA_KEY_MSG_ID];
-                                if (ackMsgId == pendingAckCmd.msgId) {
-                                    Serial.printf("LORA ACK OK for msgId %d\n", ackMsgId);
-                                    waitingForAck = false;
-                                }
-                            } else if (strcmp(type, LORA_MSG_TYPE_TELEMETRY) == 0) {
-                                uint8_t nodeId = decryptedDoc[LORA_KEY_NODE_ID];
-                                if (deviceManager.isDeviceRegistered(nodeId)) {
-                                    float rssi = radio.getRSSI();
-                                    float snr = radio.getSNR();
-                                    deviceManager.updateDeviceSignalInfo(nodeId, rssi, snr);
-
-                                    JsonObject data = decryptedDoc[LORA_KEY_DATA];
-                                    if (!data.isNull()) {
-                                        data["rssi"] = rssi;
-                                        data["snr"] = snr;
-                                    }
-
-                                    if (xQueueSend(loraRxQueue, &decryptedDoc, pdMS_TO_TICKS(10)) != pdPASS) {
-                                        Serial.println("LoRa RX Queue is full!");
-                                    }
-                                }
-                            } else if (strcmp(type, LORA_MSG_TYPE_CMD) == 0) {
-                                Serial.printf("LoRa RX: Received CMD: %s. Acting on it is not implemented yet.\n", decryptedStr.c_str());
-                            }
+                        if (xQueueSend(loraRxQueue, &decryptedDoc, pdMS_TO_TICKS(10)) != pdPASS) {
+                            Serial.println("LoRa RX Queue is full!");
                         }
                     }
                 }

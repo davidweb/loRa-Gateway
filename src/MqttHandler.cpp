@@ -3,6 +3,7 @@
 #include "types.h"
 #include "DeviceManager.h"
 #include "LoRaHandler.h" // Pour les fonctions de chiffrement
+#include "helpers.h"
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
@@ -55,7 +56,7 @@ void taskMqttHandler(void *pvParameters) {
     mqttClient.setServer(TB_SERVER, TB_PORT);
     mqttClient.setCallback(mqttCallback);
 
-    JsonDocument telemetryDoc;
+    StaticJsonDocument<256> telemetryDoc;
     char mqttPayload[384];
     unsigned long lastWifiAttempt = 0;
     unsigned long lastMqttAttempt = 0;
@@ -147,8 +148,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         String encryptedPayload = encrypt_payload(plaintextStr);
 
         JsonDocument loraDoc;
-        loraDoc[LORA_KEY_DATA] = encryptedPayload;
-        loraDoc[LORA_KEY_CRC] = calculateCRC32((const uint8_t*)encryptedPayload.c_str(), encryptedPayload.length());
+        loraDoc[LORA_KEY_PAYLOAD] = encryptedPayload;
+        loraDoc[LORA_KEY_CRC] = calculateCRC32((const uint8_t*)plaintextStr.c_str(), plaintextStr.length());
         
         serializeJson(loraDoc, cmd.payload, sizeof(cmd.payload));
 

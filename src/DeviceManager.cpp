@@ -15,6 +15,7 @@ void DeviceManager::init() {
     for (int i = 0; i < MAX_DEVICES; ++i) {
         devices[i].isActive = false;
         devices[i].nodeId = i + 1; // nodeId de 1 à MAX_DEVICES
+        devices[i].lastMsgCounter = 0;
     }
     unlock();
     loadFromNVS();
@@ -31,7 +32,9 @@ void DeviceManager::loadFromNVS() {
             if (deserializeJson(doc, storedDevice) == DeserializationError::Ok) {
                 devices[i].isActive = true;
                 strncpy(devices[i].deviceName, doc["mac"], sizeof(devices[i].deviceName) - 1);
+                devices[i].deviceName[sizeof(devices[i].deviceName) - 1] = '\0';
                 strncpy(devices[i].deviceType, doc["type"], sizeof(devices[i].deviceType) - 1);
+                devices[i].deviceType[sizeof(devices[i].deviceType) - 1] = '\0';
                 Serial.printf("NVS Loaded: Slot %d, MAC: %s, Type: %s\n", i, devices[i].deviceName, devices[i].deviceType);
             }
         }
@@ -71,8 +74,10 @@ int8_t DeviceManager::registerDevice(const char* mac, const char* type) {
     }
     
     devices[slot].isActive = true;
-    strncpy(devices[slot].deviceName, mac, sizeof(devices[slot].deviceName) - 1);
-    strncpy(devices[slot].deviceType, type, sizeof(devices[slot].deviceType) - 1);
+    strncpy(devices[slot].deviceName, mac, sizeof(devices[slot].deviceName));
+    devices[slot].deviceName[sizeof(devices[slot].deviceName) - 1] = '\0';
+    strncpy(devices[slot].deviceType, type, sizeof(devices[slot].deviceType));
+    devices[slot].deviceType[sizeof(devices[slot].deviceType) - 1] = '\0';
     devices[slot].lastSeen = millis();
     uint8_t newId = devices[slot].nodeId;
     
@@ -87,6 +92,18 @@ bool DeviceManager::isDeviceRegistered(uint8_t nodeId) {
     bool status = devices[nodeId - 1].isActive;
     unlock();
     return status;
+}
+
+bool DeviceManager::isValidMessageCounter(uint8_t nodeId, uint32_t counter) {
+    if (nodeId < 1 || nodeId > MAX_DEVICES) return false;
+    lock();
+    if (counter > devices[nodeId - 1].lastMsgCounter) {
+        devices[nodeId - 1].lastMsgCounter = counter;
+        unlock();
+        return true;
+    }
+    unlock();
+    return false;
 }
 
 void DeviceManager::updateDeviceSignalInfo(uint8_t nodeId, float rssi, float snr) {

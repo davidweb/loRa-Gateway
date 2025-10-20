@@ -72,9 +72,15 @@ void setup() {
         ESP.restart();
     }
 
-    xTaskCreatePinnedToCore(taskOledDisplay, "OLED", 3072, NULL, 1, NULL, 0);
-    xTaskCreatePinnedToCore(taskMqttHandler, "MQTT", 4096, NULL, 2, NULL, 0);
-    xTaskCreatePinnedToCore(taskLoRaHandler, "LoRa", 4096, NULL, 2, NULL, 1);
+    BaseType_t oledTaskStatus = xTaskCreatePinnedToCore(taskOledDisplay, "OLED", 3072, NULL, 1, NULL, 0);
+    BaseType_t mqttTaskStatus = xTaskCreatePinnedToCore(taskMqttHandler, "MQTT", 4096, NULL, 2, NULL, 0);
+    BaseType_t loraTaskStatus = xTaskCreatePinnedToCore(taskLoRaHandler, "LoRa", 4096, NULL, 2, NULL, 1);
+
+    if (oledTaskStatus != pdPASS || mqttTaskStatus != pdPASS || loraTaskStatus != pdPASS) {
+        Serial.println("Erreur: Impossible de créer une ou plusieurs tâches FreeRTOS. Redemarrage...");
+        delay(5000);
+        ESP.restart();
+    }
     
     esp_task_wdt_delete(NULL); // Fin de la surveillance du setup
     Serial.println("Tâches FreeRTOS démarrées. Le système est opérationnel.");
