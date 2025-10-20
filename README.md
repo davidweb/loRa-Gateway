@@ -84,3 +84,5 @@ Press the hardware button on GPIO pin 0 to cycle through the pages.
 - **Compilation Errors:** If you encounter dependency issues, delete the `.pio` directory and rebuild the project. This will force PlatformIO to download fresh copies of all libraries.
 - **Connection Issues:** Double-check your credentials in `include/credentials.h`. Verify that your WiFi network is available and that the ThingsBoard server is accessible.
 - **LoRa Communication:** Ensure that your end-devices are configured with the correct frequency, spreading factor, and encryption keys.
+
+Mail : neorak.pic@gmail.com
