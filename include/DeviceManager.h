@@ -1,4 +1,5 @@
 #pragma once
+#include "config.h"
 #include "types.h"
 #include <ArduinoJson.h>
 
@@ -8,11 +9,12 @@ public:
     void init();
     int8_t registerDevice(const char* mac, const char* type);
     bool isDeviceRegistered(uint8_t nodeId);
-    void updateDeviceLastSeen(uint8_t nodeId);
+    void updateDeviceSignalInfo(uint8_t nodeId, float rssi, float snr);
     const char* getDeviceName(uint8_t nodeId);
     uint8_t findNodeIdByName(const char* name);
     uint8_t getOnlineDeviceCount();
     void getAllActiveDeviceNames(JsonArray& deviceList);
+    const DeviceInfo* getDeviceInfo(uint8_t index);
 
 private:
     DeviceInfo devices[MAX_DEVICES];
