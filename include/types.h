@@ -43,6 +43,7 @@ struct DeviceInfo {
     unsigned long lastSeen;
     float lastRssi;
     float lastSnr;
+    uint32_t lastMsgCounter; // Pour la prévention des attaques par rejeu
 };
 
 // Structure pour les messages dans la file d'attente LoRa Tx
@@ -74,6 +75,7 @@ constexpr const char* LORA_KEY_SECRET = "secret";
 constexpr const char* LORA_KEY_DEV_TYPE = "devType";
 constexpr const char* LORA_KEY_NODE_ID = "nodeId";
 constexpr const char* LORA_KEY_DATA = "data";
+constexpr const char* LORA_KEY_MSG_COUNTER = "msgCtr";
 constexpr const char* LORA_KEY_METHOD = "method";
 constexpr const char* LORA_KEY_PARAMS = "params";
 

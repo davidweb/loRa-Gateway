@@ -4,17 +4,21 @@
 // =================== CONFIGURATION DU PROJET =====================
 // =================================================================
 
-#define FIRMWARE_VERSION "1.0.0-prod"
+#define FIRMWARE_VERSION "1.0.1-alpha"
+
+// -------- Fichier des identifiants --------
+// Les informations sensibles sont stockées dans `credentials.h`, qui n'est pas suivi par Git.
+#if __has_include("credentials.h")
+#include "credentials.h"
+#else
+#error "Le fichier 'include/credentials.h' est manquant. Veuillez le créer à partir de 'credentials.h.example' et y renseigner vos informations."
+#endif
 
 // -------- Configuration WiFi --------
-#define WIFI_SSID "VOTRE_SSID_WIFI"
-#define WIFI_PASSWORD "VOTRE_MOT_DE_PASSE_WIFI"
 #define WIFI_RECONNECT_INTERVAL_MS 30000 // Tentative de reconnexion toutes les 30s
 
 // -------- Configuration MQTT pour ThingsBoard --------
-#define TB_SERVER "192.168.1.XX"                 // IP de votre Raspberry Pi
 #define TB_PORT 1883
-#define TB_GATEWAY_TOKEN "VOTRE_TOKEN_PASSERELLE" // Jeton d'accès de la passerelle
 #define MQTT_RECONNECT_INTERVAL_MS 5000         // Tentative de reconnexion toutes les 5s
 
 // -------- Configuration LoRa --------
@@ -23,8 +27,6 @@
 #define LORA_DIO1 14
 #define LORA_RST 12
 #define LORA_BUSY 13
-#define LORA_SECRET_KEY "HydrauParkSecret" // Clé secrète de 16 octets pour AES-128
-#define LORA_AES_IV "EGCSOHydraulique"   // IV de 16 octets pour AES-128
 
 // -------- Configuration Matérielle (OLED Heltec V3) --------
 #define OLED_SDA 17

@@ -44,15 +44,15 @@ void taskOledDisplay(void *pvParameters) {
                 display.drawString(0, 0, "==== ECRAN PRINCIPAL ====");
                 switch(systemStatus.wifi) {
                     case WIFI_CONNECTED: snprintf(buffer, sizeof(buffer), "IP: %s", WiFi.localIP().toString().c_str()); break;
-                    case WIFI_CONNECTING: strcpy(buffer, "WiFi: Connexion..."); break;
-                    default: strcpy(buffer, "WiFi: Deconnecte"); break;
+                    case WIFI_CONNECTING: strncpy(buffer, "WiFi: Connexion...", sizeof(buffer)); break;
+                    default: strncpy(buffer, "WiFi: Deconnecte", sizeof(buffer)); break;
                 }
                 display.drawString(0, 12, buffer);
 
                 switch(systemStatus.mqtt) {
-                    case GW_MQTT_CONNECTED: strcpy(buffer, "ThingsBoard: Connecte"); break;
-                    case GW_MQTT_CONNECTING: strcpy(buffer, "ThingsBoard: Connexion..."); break;
-                    default: strcpy(buffer, "ThingsBoard: Deconnecte"); break;
+                    case GW_MQTT_CONNECTED: strncpy(buffer, "ThingsBoard: Connecte", sizeof(buffer)); break;
+                    case GW_MQTT_CONNECTING: strncpy(buffer, "ThingsBoard: Connexion...", sizeof(buffer)); break;
+                    default: strncpy(buffer, "ThingsBoard: Deconnecte", sizeof(buffer)); break;
                 }
                 display.drawString(0, 24, buffer);
 
@@ -62,7 +62,7 @@ void taskOledDisplay(void *pvParameters) {
                 if (systemStatus.lastLoRaRxTime > 0) {
                     snprintf(buffer, sizeof(buffer), "LoRa RX: il y a %lus", (millis() - systemStatus.lastLoRaRxTime) / 1000);
                 } else {
-                    strcpy(buffer, "LoRa RX: N/A");
+                    strncpy(buffer, "LoRa RX: N/A", sizeof(buffer));
                 }
                 display.drawString(0, 48, buffer);
                 break;
