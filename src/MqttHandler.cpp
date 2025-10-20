@@ -94,15 +94,17 @@ void taskMqttHandler(void *pvParameters) {
             }
         }
 
-        if (xQueueReceive(loraRxQueue, &telemetryDoc, 0) == pdPASS) {
-            uint8_t nodeId = telemetryDoc[LORA_KEY_NODE_ID];
-            const char* deviceName = deviceManager.getDeviceName(nodeId);
+        LoRaMessage rxMsg;
+        if (xQueueReceive(loraRxQueue, &rxMsg, 0) == pdPASS) {
+            StaticJsonDocument<256> telemetryDoc;
+            deserializeJson(telemetryDoc, rxMsg.payload);
 
+            const char* deviceName = deviceManager.getDeviceName(rxMsg.nodeId);
             JsonObject data = telemetryDoc[LORA_KEY_DATA];
             String dataStr;
             serializeJson(data, dataStr);
 
-            snprintf(mqttPayload, sizeof(mqttPayload), "{\"%s\":[{\"ts\":%lu, \"values\":%s}]}", 
+            snprintf(mqttPayload, sizeof(mqttPayload), "{\"%s\":[{\"ts\":%lu, \"values\":%s}]}",
                 deviceName, millis(), dataStr.c_str());
 
             if (!mqttClient.publish(TB_TELEMETRY_TOPIC, mqttPayload)) {
