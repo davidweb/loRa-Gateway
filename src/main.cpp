@@ -20,7 +20,7 @@ SX1262 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
-SystemStatus systemStatus = { WIFI_DISCONNECTED, MQTT_DISCONNECTED, 0, 0 };
+SystemStatus systemStatus = { WIFI_DISCONNECTED, GW_MQTT_DISCONNECTED, 0, 0 };
 
 // ===================== OBJETS FreeRTOS =====================
 QueueHandle_t loraTxQueue;

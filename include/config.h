@@ -23,12 +23,14 @@
 #define LORA_DIO1 14
 #define LORA_RST 12
 #define LORA_BUSY 13
-#define LORA_SECRET_KEY "HydrauParkSecretKey2025" // Clé secrète partagée pour l'authentification
+#define LORA_SECRET_KEY "HydrauParkSecret" // Clé secrète de 16 octets pour AES-128
+#define LORA_AES_IV "EGCSOHydraulique"   // IV de 16 octets pour AES-128
 
 // -------- Configuration Matérielle (OLED Heltec V3) --------
 #define OLED_SDA 17
 #define OLED_SCL 18
 #define OLED_RST 21
+#define DIAG_BUTTON_PIN 0 // Bouton "PRG" sur la carte Heltec
 
 // -------- Configuration Système --------
 #define MAX_DEVICES 20                   // Nombre maximum de modules gérables

@@ -1,6 +1,7 @@
 #include "DeviceManager.h"
 #include "config.h"
 #include <Preferences.h>
+#include <ArduinoJson.h>
 
 DeviceManager deviceManager;
 Preferences preferences;
@@ -22,7 +23,7 @@ void DeviceManager::init() {
 void DeviceManager::loadFromNVS() {
     lock();
     preferences.begin(NVS_NAMESPACE, true); // Lecture seule
-    StaticJsonDocument<128> doc;
+    JsonDocument doc;
     for (int i = 0; i < MAX_DEVICES; i++) {
         String key = "dev_" + String(i);
         if (preferences.isKey(key.c_str())) {
@@ -43,7 +44,7 @@ void DeviceManager::saveToNVS(uint8_t slotIndex) {
     preferences.begin(NVS_NAMESPACE, false); // Lecture/Écriture
     String key = "dev_" + String(slotIndex);
 
-    StaticJsonDocument<128> doc;
+    JsonDocument doc;
     doc["mac"] = devices[slotIndex].deviceName;
     doc["type"] = devices[slotIndex].deviceType;
 
@@ -88,16 +89,23 @@ bool DeviceManager::isDeviceRegistered(uint8_t nodeId) {
     return status;
 }
 
-void DeviceManager::updateDeviceLastSeen(uint8_t nodeId) {
+void DeviceManager::updateDeviceSignalInfo(uint8_t nodeId, float rssi, float snr) {
     if (nodeId < 1 || nodeId > MAX_DEVICES) return;
     lock();
     devices[nodeId - 1].lastSeen = millis();
+    devices[nodeId - 1].lastRssi = rssi;
+    devices[nodeId - 1].lastSnr = snr;
     unlock();
 }
 
 const char* DeviceManager::getDeviceName(uint8_t nodeId) {
     if (!isDeviceRegistered(nodeId)) return "UNKNOWN";
     return devices[nodeId - 1].deviceName;
+}
+
+const DeviceInfo* DeviceManager::getDeviceInfo(uint8_t index) {
+    if (index >= MAX_DEVICES) return nullptr;
+    return &devices[index];
 }
 
 uint8_t DeviceManager::findNodeIdByName(const char* name) {

@@ -2,9 +2,11 @@
 #include "config.h"
 #include "types.h"
 #include "DeviceManager.h"
+#include "LoRaHandler.h" // Pour les fonctions de chiffrement
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include <esp_task_wdt.h>
 
 extern WiFiClient espClient;
 extern PubSubClient mqttClient;
@@ -24,15 +26,15 @@ void connectWiFi() {
 
 void connectMqtt() {
     if (mqttClient.connected()) return;
-    systemStatus.mqtt = MQTT_CONNECTING;
+    systemStatus.mqtt = GW_MQTT_CONNECTING;
     Serial.println("Connecting to MQTT broker...");
 
     if (mqttClient.connect("Gateway_HeltecV3", TB_GATEWAY_TOKEN, NULL)) {
-        systemStatus.mqtt = MQTT_CONNECTED;
+        systemStatus.mqtt = GW_MQTT_CONNECTED;
         Serial.println("MQTT Connected.");
         mqttClient.subscribe(TB_RPC_TOPIC);
 
-        StaticJsonDocument<1024> doc;
+        JsonDocument doc;
         JsonArray devices = doc.to<JsonArray>();
         deviceManager.getAllActiveDeviceNames(devices);
         for(JsonVariant deviceName : devices) {
@@ -42,7 +44,7 @@ void connectMqtt() {
             vTaskDelay(pdMS_TO_TICKS(50));
         }
     } else {
-        systemStatus.mqtt = MQTT_DISCONNECTED;
+        systemStatus.mqtt = GW_MQTT_DISCONNECTED;
         Serial.printf("MQTT connection failed, rc=%d\n", mqttClient.state());
     }
 }
@@ -53,7 +55,7 @@ void taskMqttHandler(void *pvParameters) {
     mqttClient.setServer(TB_SERVER, TB_PORT);
     mqttClient.setCallback(mqttCallback);
 
-    StaticJsonDocument<256> telemetryDoc;
+    JsonDocument telemetryDoc;
     char mqttPayload[384];
     unsigned long lastWifiAttempt = 0;
     unsigned long lastMqttAttempt = 0;
@@ -113,8 +115,9 @@ void taskMqttHandler(void *pvParameters) {
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
+    static uint16_t msgIdCounter = 0;
     Serial.printf("MQTT RX: [%s]\n", topic);
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, payload, length);
     if (error) {
         Serial.printf("MQTT RX: JSON parsing failed: %s\n", error.c_str());
@@ -130,16 +133,22 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     if (targetNodeId > 0) {
         LoRaTxCommand cmd;
         cmd.targetNodeId = targetNodeId;
+        cmd.msgId = ++msgIdCounter;
+        cmd.requireAck = true;
 
-        StaticJsonDocument<128> loraDoc;
-        JsonObject p = loraDoc.createNestedObject(LORA_KEY_PAYLOAD);
-        p[LORA_KEY_TYPE] = LORA_MSG_TYPE_CMD;
-        p[LORA_KEY_METHOD] = data[LORA_KEY_METHOD];
-        p[LORA_KEY_PARAMS] = data[LORA_KEY_PARAMS];
+        JsonDocument plaintextDoc;
+        plaintextDoc[LORA_KEY_TYPE] = LORA_MSG_TYPE_CMD;
+        plaintextDoc[LORA_KEY_MSG_ID] = cmd.msgId;
+        plaintextDoc[LORA_KEY_METHOD] = data[LORA_KEY_METHOD];
+        plaintextDoc[LORA_KEY_PARAMS] = data[LORA_KEY_PARAMS];
+        String plaintextStr;
+        serializeJson(plaintextDoc, plaintextStr);
 
-        String loraPayloadStr;
-        serializeJson(p, loraPayloadStr);
-        loraDoc[LORA_KEY_CRC] = calculateCRC32((const uint8_t*)loraPayloadStr.c_str(), loraPayloadStr.length());
+        String encryptedPayload = encrypt_payload(plaintextStr);
+
+        JsonDocument loraDoc;
+        loraDoc[LORA_KEY_DATA] = encryptedPayload;
+        loraDoc[LORA_KEY_CRC] = calculateCRC32((const uint8_t*)encryptedPayload.c_str(), encryptedPayload.length());
         
         serializeJson(loraDoc, cmd.payload, sizeof(cmd.payload));
 
