@@ -169,7 +169,11 @@ void taskLoRaHandler(void *pvParameters) {
                             data["snr"] = snr;
                         }
 
-                        if (xQueueSend(loraRxQueue, &decryptedDoc, pdMS_TO_TICKS(10)) != pdPASS) {
+                        LoRaMessage msg;
+                        msg.nodeId = nodeId;
+                        serializeJson(decryptedDoc, msg.payload, sizeof(msg.payload));
+
+                        if (xQueueSend(loraRxQueue, &msg, pdMS_TO_TICKS(10)) != pdPASS) {
                             Serial.println("LoRa RX Queue is full!");
                         }
                     }
@@ -188,22 +192,25 @@ String encrypt_payload(const String& plaintext) {
     memcpy(key, LORA_SECRET_KEY, 16);
     memcpy(iv, LORA_AES_IV, 16);
 
-    int plaintextLen = plaintext.length() + 1;
-    int paddedLen = (plaintextLen / 16 + 1) * 16;
-    byte *paddedPlaintext = new byte[paddedLen];
+    int plaintextLen = plaintext.length() + 1; // +1 for null terminator
+    int paddedLen = (plaintextLen / 16 + (plaintextLen % 16 == 0 ? 0 : 1)) * 16;
+
+    if (paddedLen > 256) {
+        Serial.println("Error: Plaintext too long for encryption buffer!");
+        return "";
+    }
+
+    byte paddedPlaintext[paddedLen];
     memset(paddedPlaintext, 0, paddedLen);
     memcpy(paddedPlaintext, plaintext.c_str(), plaintextLen);
 
-    byte *encrypted = new byte[paddedLen];
+    byte encrypted[paddedLen];
     aesLib.encrypt(paddedPlaintext, paddedLen, encrypted, key, sizeof(key), iv);
 
     char b64_output[base64_enc_len(paddedLen)];
     base64_encode(b64_output, (char*)encrypted, paddedLen);
-    String b64Str(b64_output);
 
-    delete[] paddedPlaintext;
-    delete[] encrypted;
-    return b64Str;
+    return String(b64_output);
 }
 
 String decrypt_payload(const String& b64_ciphertext) {
@@ -212,19 +219,40 @@ String decrypt_payload(const String& b64_ciphertext) {
     memcpy(key, LORA_SECRET_KEY, 16);
     memcpy(iv, LORA_AES_IV, 16);
 
+    if (b64_ciphertext.length() > 342) { // 256 bytes padded to 272, then base64 to ~363. Safety margin.
+        Serial.println("Error: Ciphertext too long for decryption buffer!");
+        return "";
+    }
+
     char b64_input[b64_ciphertext.length() + 1];
     b64_ciphertext.toCharArray(b64_input, sizeof(b64_input));
 
     int decodedLen = base64_dec_len(b64_input, sizeof(b64_input));
-    byte *decoded = new byte[decodedLen];
+    if (decodedLen > 256) {
+        Serial.println("Error: Decoded length exceeds buffer size!");
+        return "";
+    }
+
+    byte decoded[decodedLen];
     base64_decode((char*)decoded, b64_input, sizeof(b64_input));
 
-    byte *decrypted = new byte[decodedLen];
+    byte decrypted[decodedLen];
     aesLib.decrypt(decoded, decodedLen, decrypted, key, sizeof(key), iv);
 
-    String plaintext = String((char*)decrypted);
+    // Remove PKCS7 padding
+    int pad = decrypted[decodedLen - 1];
+    if (pad > 0 && pad <= 16) {
+        bool padding_ok = true;
+        for (int i = 0; i < pad; i++) {
+            if (decrypted[decodedLen - 1 - i] != pad) {
+                padding_ok = false;
+                break;
+            }
+        }
+        if (padding_ok) {
+            return String((char*)decrypted).substring(0, decodedLen - pad);
+        }
+    }
 
-    delete[] decoded;
-    delete[] decrypted;
-    return plaintext;
+    return String((char*)decrypted);
 }

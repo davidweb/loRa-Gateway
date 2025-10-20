@@ -54,6 +54,12 @@ struct LoRaTxCommand {
     bool requireAck;
 };
 
+// Structure pour les messages LoRa reçus à passer au MqttHandler
+struct LoRaMessage {
+    uint8_t nodeId;
+    char payload[256]; // Le payload est le JSON des données de télémétrie
+};
+
 // =================================================================
 // =================== CONSTANTES DU PROTOCOLE =====================
 // =================================================================

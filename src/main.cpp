@@ -64,7 +64,7 @@ void setup() {
     Serial.println("Device Manager initialisé.");
 
     loraTxQueue = xQueueCreate(TX_QUEUE_SIZE, sizeof(LoRaTxCommand));
-    loraRxQueue = xQueueCreate(RX_QUEUE_SIZE, sizeof(StaticJsonDocument<256>));
+    loraRxQueue = xQueueCreate(RX_QUEUE_SIZE, sizeof(LoRaMessage));
     systemQueue = xQueueCreate(5, sizeof(SystemEvent));
     if (!loraTxQueue || !loraRxQueue || !systemQueue) {
         Serial.println("Erreur: Impossible de créer les files d'attente. Redemarrage...");
