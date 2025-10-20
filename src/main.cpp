@@ -12,17 +12,20 @@
 #include "MqttHandler.h"
 #include "LoRaHandler.h"
 
+extern void loraInterrupt();
+
 // ===================== OBJETS GLOBAUX =====================
 SSD1306Wire display(0x3c, OLED_SDA, OLED_SCL);
 SX1262 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
-SystemStatus systemStatus = { WIFI_DISCONNECTED, MQTT_DISCONNECTED, 0, 0, false };
+SystemStatus systemStatus = { WIFI_DISCONNECTED, MQTT_DISCONNECTED, 0, 0 };
 
 // ===================== OBJETS FreeRTOS =====================
 QueueHandle_t loraTxQueue;
 QueueHandle_t loraRxQueue;
+QueueHandle_t systemQueue;
 
 void setup() {
     Serial.begin(115200);
@@ -54,6 +57,7 @@ void setup() {
         delay(5000);
         ESP.restart();
     }
+    radio.setDio1Action(loraInterrupt);
     Serial.println("Module LoRa (SX1262) OK.");
 
     deviceManager.init();
@@ -61,7 +65,8 @@ void setup() {
 
     loraTxQueue = xQueueCreate(TX_QUEUE_SIZE, sizeof(LoRaTxCommand));
     loraRxQueue = xQueueCreate(RX_QUEUE_SIZE, sizeof(StaticJsonDocument<256>));
-    if (!loraTxQueue || !loraRxQueue) {
+    systemQueue = xQueueCreate(5, sizeof(SystemEvent));
+    if (!loraTxQueue || !loraRxQueue || !systemQueue) {
         Serial.println("Erreur: Impossible de créer les files d'attente. Redemarrage...");
         delay(5000);
         ESP.restart();

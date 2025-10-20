@@ -10,6 +10,7 @@ extern WiFiClient espClient;
 extern PubSubClient mqttClient;
 extern QueueHandle_t loraTxQueue;
 extern QueueHandle_t loraRxQueue;
+extern QueueHandle_t systemQueue;
 extern SystemStatus systemStatus;
 
 void mqttCallback(char* topic, byte* payload, unsigned int length);
@@ -72,20 +73,29 @@ void taskMqttHandler(void *pvParameters) {
         systemStatus.wifi = WIFI_CONNECTED;
 
         if (!mqttClient.connected()) {
-            if (systemStatus.mqttNeedsReconnect || millis() - lastMqttAttempt > MQTT_RECONNECT_INTERVAL_MS) {
+            if (millis() - lastMqttAttempt > MQTT_RECONNECT_INTERVAL_MS) {
                 connectMqtt();
                 lastMqttAttempt = millis();
-                systemStatus.mqttNeedsReconnect = false;
             }
         }
         
         mqttClient.loop();
 
+        SystemEvent event;
+        if (xQueueReceive(systemQueue, &event, 0) == pdPASS) {
+            if (event.type == NEW_DEVICE_REGISTERED) {
+                const char* deviceName = deviceManager.getDeviceName(event.nodeId);
+                char payloadBuffer[64];
+                snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"device\":\"%s\"}", deviceName);
+                mqttClient.publish(TB_CONNECT_TOPIC, payloadBuffer);
+            }
+        }
+
         if (xQueueReceive(loraRxQueue, &telemetryDoc, 0) == pdPASS) {
-            uint8_t nodeId = telemetryDoc["nodeId"];
+            uint8_t nodeId = telemetryDoc[LORA_KEY_NODE_ID];
             const char* deviceName = deviceManager.getDeviceName(nodeId);
 
-            JsonObject data = telemetryDoc["data"];
+            JsonObject data = telemetryDoc[LORA_KEY_DATA];
             String dataStr;
             serializeJson(data, dataStr);
 
@@ -122,14 +132,14 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         cmd.targetNodeId = targetNodeId;
 
         StaticJsonDocument<128> loraDoc;
-        JsonObject p = loraDoc.createNestedObject("p");
-        p["type"] = "CMD";
-        p["method"] = data["method"];
-        p["params"] = data["params"];
+        JsonObject p = loraDoc.createNestedObject(LORA_KEY_PAYLOAD);
+        p[LORA_KEY_TYPE] = LORA_MSG_TYPE_CMD;
+        p[LORA_KEY_METHOD] = data[LORA_KEY_METHOD];
+        p[LORA_KEY_PARAMS] = data[LORA_KEY_PARAMS];
 
         String loraPayloadStr;
         serializeJson(p, loraPayloadStr);
-        loraDoc["c"] = calculateCRC32((const uint8_t*)loraPayloadStr.c_str(), loraPayloadStr.length());
+        loraDoc[LORA_KEY_CRC] = calculateCRC32((const uint8_t*)loraPayloadStr.c_str(), loraPayloadStr.length());
         
         serializeJson(loraDoc, cmd.payload, sizeof(cmd.payload));
 

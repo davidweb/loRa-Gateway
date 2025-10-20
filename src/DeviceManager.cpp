@@ -22,15 +22,15 @@ void DeviceManager::init() {
 void DeviceManager::loadFromNVS() {
     lock();
     preferences.begin(NVS_NAMESPACE, true); // Lecture seule
+    StaticJsonDocument<128> doc;
     for (int i = 0; i < MAX_DEVICES; i++) {
         String key = "dev_" + String(i);
         if (preferences.isKey(key.c_str())) {
             String storedDevice = preferences.getString(key.c_str(), "");
-            char mac[20], type[24];
-            if (sscanf(storedDevice.c_str(), "%19[^,],%23s", mac, type) == 2) {
+            if (deserializeJson(doc, storedDevice) == DeserializationError::Ok) {
                 devices[i].isActive = true;
-                strncpy(devices[i].deviceName, mac, sizeof(devices[i].deviceName) - 1);
-                strncpy(devices[i].deviceType, type, sizeof(devices[i].deviceType) - 1);
+                strncpy(devices[i].deviceName, doc["mac"], sizeof(devices[i].deviceName) - 1);
+                strncpy(devices[i].deviceType, doc["type"], sizeof(devices[i].deviceType) - 1);
                 Serial.printf("NVS Loaded: Slot %d, MAC: %s, Type: %s\n", i, devices[i].deviceName, devices[i].deviceType);
             }
         }
@@ -42,11 +42,17 @@ void DeviceManager::loadFromNVS() {
 void DeviceManager::saveToNVS(uint8_t slotIndex) {
     preferences.begin(NVS_NAMESPACE, false); // Lecture/Écriture
     String key = "dev_" + String(slotIndex);
-    char buffer[64];
-    snprintf(buffer, sizeof(buffer), "%s,%s", devices[slotIndex].deviceName, devices[slotIndex].deviceType);
+
+    StaticJsonDocument<128> doc;
+    doc["mac"] = devices[slotIndex].deviceName;
+    doc["type"] = devices[slotIndex].deviceType;
+
+    String buffer;
+    serializeJson(doc, buffer);
+
     preferences.putString(key.c_str(), buffer);
     preferences.end();
-    Serial.printf("NVS Saved: Slot %d, Data: %s\n", slotIndex, buffer);
+    Serial.printf("NVS Saved: Slot %d, Data: %s\n", slotIndex, buffer.c_str());
 }
 
 int8_t DeviceManager::registerDevice(const char* mac, const char* type) {
