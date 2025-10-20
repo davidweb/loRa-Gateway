@@ -52,8 +52,8 @@ The gateway implements a comprehensive security model to protect against common 
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/your-repo/industrial-lora-gateway.git
-   cd industrial-lora-gateway
+   git clone https://github.com/davidweb/loRa-Gateway.git
+   cd loRa-gateway
    ```
 
 2. **Configure Credentials:**
