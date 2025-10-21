@@ -19,6 +19,15 @@ The software is engineered to industrial-grade standards, emphasizing security, 
 - **OLED Display Menu:** A user-friendly, multi-page diagnostic menu displays key system stats, including connection status, device information, and message counts.
 - **Robust and Reliable:** The gateway is designed for long-term, stable operation, with built-in watchdog timers and automatic reconnection logic for both WiFi and MQTT.
 
+## Compatible Modules
+
+This gateway is designed to work with a range of LoRa modules. The following modules are included in this repository and have been fully tested for compatibility:
+
+- **`AquaReservPro`:** A water reservoir level sensor. It monitors whether the reservoir is full or empty and sends telemetry data to the gateway. It also features a local web interface for real-time monitoring.
+- **`WellguardPro`:** A well pump station controller. It monitors temperature, humidity, voltage, and pressure, and can be remotely controlled via the ThingsBoard dashboard to turn the pump on or off. It also features a local web interface for monitoring and control.
+
+For more information on the modules, please see the `Modules/README.md` file.
+
 ## Software Architecture
 
 The gateway's software is built on a modular, task-based architecture using FreeRTOS. This design ensures that critical functions operate independently and efficiently.
@@ -84,4 +93,3 @@ Press the hardware button on GPIO pin 0 to cycle through the pages.
 - **Compilation Errors:** If you encounter dependency issues, delete the `.pio` directory and rebuild the project. This will force PlatformIO to download fresh copies of all libraries.
 - **Connection Issues:** Double-check your credentials in `include/credentials.h`. Verify that your WiFi network is available and that the ThingsBoard server is accessible.
 - **LoRa Communication:** Ensure that your end-devices are configured with the correct frequency, spreading factor, and encryption keys.
-

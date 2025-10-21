@@ -1,38 +1,49 @@
 #include "LoraNode.h"
 #include "config.h"
+#include "credentials.h"
+#include "helpers.h"
+#include "Base64.h"
 #include <RadioLib.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <AESLib.h>
 
-// Déclaration de l'objet radio global et de la fonction de contrôle de la pompe depuis main.cpp
 extern SX1262 radio;
-void setPumpState(bool state, bool fromLora = false);
-
+extern void setPumpState(bool state, bool fromLora);
 Preferences preferences;
+AESLib aesLib;
 
-// Fonction de calcul du CRC32 - DOIT être identique à celle de la passerelle
-uint32_t calculateCRC32(const uint8_t *data, size_t length) {
-    uint32_t crc = 0xffffffff;
-    while (length--) {
-        uint8_t c = *data++;
-        for (uint32_t i = 0x80; i > 0; i >>= 1) {
-            bool bit = crc & 0x80000000;
-            if (c & i) { bit = !bit; }
-            crc <<= 1;
-            if (bit) { crc ^= 0x04c11db7; }
-        }
-    }
-    return crc;
-}
+// Tampons pour le chiffrement/déchiffrement
+byte aes_key[16];
+byte aes_iv[16];
+byte encrypted[256];
+byte decrypted[256];
+
 
 void LoraNode::init() {
+    memcpy(aes_key, LORA_SECRET_KEY, 16);
+    memcpy(aes_iv, LORA_AES_IV, 16);
+
     loadConfig();
+
+    Serial.print(F("[LORA] Initializing... "));
     int state = radio.begin(LORA_FREQ);
     if (state != RADIOLIB_ERR_NONE) {
-        Serial.printf("Erreur fatale: Initialisation LoRa impossible, code %d\n", state);
-        delay(5000);
+        Serial.printf("failed, code %d\n", state);
         ESP.restart();
+    }
+    Serial.println(F("success!"));
+}
+
+void LoraNode::run() {
+    if (nodeId == 0) {
+        if (millis() - lastJoinAttempt > 10000) { // Tenter de joindre toutes les 10s
+            lastJoinAttempt = millis();
+            performJoinRequest();
+        }
+    } else {
+        listenForCommands();
     }
 }
 
@@ -41,82 +52,123 @@ bool LoraNode::isJoined() {
 }
 
 void LoraNode::loadConfig() {
-    preferences.begin(NVS_NAMESPACE, true); // Lecture seule
+    preferences.begin(NVS_NAMESPACE, false);
     nodeId = preferences.getUChar("nodeId", 0);
+    msgCounter = preferences.getUInt("msgCtr", 0);
     preferences.end();
-    Serial.printf("Node ID chargé depuis NVS : %d\n", nodeId);
+    Serial.printf("[NVS] Node ID: %d, Msg Counter: %u\n", nodeId, msgCounter);
 }
 
 void LoraNode::saveConfig() {
-    preferences.begin(NVS_NAMESPACE, false); // Lecture/Ecriture
+    preferences.begin(NVS_NAMESPACE, false);
     preferences.putUChar("nodeId", nodeId);
+    preferences.putUInt("msgCtr", msgCounter);
     preferences.end();
-    Serial.printf("Node ID %d sauvegardé en NVS\n", nodeId);
+    Serial.printf("[NVS] Config saved. Node ID: %d, Msg Counter: %u\n", nodeId, msgCounter);
 }
 
 void LoraNode::performJoinRequest() {
-    Serial.println("Envoi de la demande d'adhésion (JOIN_REQUEST)...");
-    StaticJsonDocument<256> doc;
-    JsonObject p = doc.createNestedObject("p");
-    p["type"] = "JOIN_REQUEST";
-    p["mac"] = WiFi.macAddress();
-    p["secret"] = LORA_SECRET_KEY;
-    p["devType"] = DEVICE_TYPE;
+    Serial.println(F("[LORA] Sending JOIN_REQUEST..."));
     
-    String payloadStr; serializeJson(p, payloadStr);
-    doc["c"] = calculateCRC32((const uint8_t*)payloadStr.c_str(), payloadStr.length());
-    String msg; serializeJson(doc, msg);
+    StaticJsonDocument<200> doc;
+    doc["type"] = "JOIN_REQUEST";
+    doc["mac"] = WiFi.macAddress();
+    doc["devType"] = DEVICE_TYPE;
 
-    radio.transmit(msg);
+    String payloadStr;
+    serializeJson(doc, payloadStr);
+
+    String encryptedPayload = encryptPayload(payloadStr);
+
+    StaticJsonDocument<256> finalDoc;
+    finalDoc["p"] = encryptedPayload;
+    finalDoc["c"] = calculateCRC32((const uint8_t*)payloadStr.c_str(), payloadStr.length());
+
+    String msg;
+    serializeJson(finalDoc, msg);
+
+    int state = radio.transmit(msg);
+    if (state != RADIOLIB_ERR_NONE) {
+        Serial.printf("[LORA] Transmit failed, code %d\n", state);
+        return;
+    }
 
     // Écouter la réponse
     String response;
-    int state = radio.receive(response, 5000); // Écouter pendant 5 secondes
+    state = radio.receive(response, 5000);
     if (state == RADIOLIB_ERR_NONE && response.length() > 0) {
-        StaticJsonDocument<128> rxDoc;
-        deserializeJson(rxDoc, response);
-        if (rxDoc.containsKey("p") && strcmp(rxDoc["p"]["type"], "JOIN_ACCEPT") == 0) {
-            nodeId = rxDoc["p"]["nodeId"];
-            if(nodeId > 0) {
-                Serial.printf("Adhésion réussie ! Node ID attribué : %d\n", nodeId);
-                saveConfig();
+        StaticJsonDocument<256> rxDoc;
+        if (deserializeJson(rxDoc, response) == DeserializationError::Ok && rxDoc.containsKey("p")) {
+            String decrypted = decryptPayload(rxDoc["p"]);
+            if (decrypted.length() > 0) {
+                StaticJsonDocument<128> joinAcceptDoc;
+                if (deserializeJson(joinAcceptDoc, decrypted) == DeserializationError::Ok &&
+                    joinAcceptDoc["type"] == "JOIN_ACCEPT") {
+
+                    nodeId = joinAcceptDoc["nodeId"];
+                    if (nodeId > 0) {
+                        msgCounter = 0; // Réinitialiser le compteur après un join réussi
+                        saveConfig();
+                        Serial.printf("[LORA] Join successful! Assigned Node ID: %d\n", nodeId);
+                    }
+                }
             }
         }
     } else {
-        Serial.println("Pas de réponse à la demande d'adhésion.");
-    }
-}
-
-void LoraNode::run() {
-    if (nodeId == 0) {
-        performJoinRequest();
-        vTaskDelay(pdMS_TO_TICKS(5000));
-    } else {
-        listenForCommands();
+        Serial.println(F("[LORA] No response to JOIN_REQUEST."));
     }
 }
 
 void LoraNode::listenForCommands() {
     String response;
-    int state = radio.receive(response, 1000); // Écouter pendant 1s de manière non bloquante
+    int state = radio.receive(response, 1000); // Écoute non bloquante
     if (state == RADIOLIB_ERR_NONE && response.length() > 0) {
-        StaticJsonDocument<256> rxDoc;
-        DeserializationError error = deserializeJson(rxDoc, response);
-        if (error || !rxDoc.containsKey("p") || !rxDoc.containsKey("c")) return;
+        StaticJsonDocument<384> rxDoc;
+        if (deserializeJson(rxDoc, response) != DeserializationError::Ok || !rxDoc.containsKey("p")) return;
 
-        JsonObject p = rxDoc["p"];
-        String payloadStr; serializeJson(p, payloadStr);
-        if (calculateCRC32((const uint8_t*)payloadStr.c_str(), payloadStr.length()) != rxDoc["c"].as<uint32_t>()) {
-             Serial.println("Commande LoRa reçue: CRC invalide !");
-             return;
-        }
-        
-        if (strcmp(p["type"], "CMD") == 0) {
-            Serial.println("Commande LoRa valide reçue !");
-            if (strcmp(p["method"], "setPump") == 0) {
-                setPumpState(p["params"]["state"], true); // Appeler la fonction de contrôle
+        String decrypted = decryptPayload(rxDoc["p"]);
+        if (decrypted.length() == 0) return;
+
+        StaticJsonDocument<256> cmdDoc;
+        if (deserializeJson(cmdDoc, decrypted) != DeserializationError::Ok) return;
+
+        if (cmdDoc["type"] == "CMD" && cmdDoc["nodeId"] == nodeId) {
+            Serial.println("[LORA] Received CMD");
+            if (cmdDoc["method"] == "setPump") {
+                setPumpState(cmdDoc["params"]["state"], true);
+                if (cmdDoc.containsKey("msgId")) {
+                    sendAck(cmdDoc["msgId"]);
+                }
             }
         }
+    }
+}
+
+void LoraNode::sendAck(uint16_t msgId) {
+    msgCounter++;
+    StaticJsonDocument<128> doc;
+    doc["type"] = "ACK";
+    doc["nodeId"] = nodeId;
+    doc["msgId"] = msgId;
+    doc["msgCtr"] = msgCounter;
+
+    String payloadStr;
+    serializeJson(doc, payloadStr);
+
+    String encryptedPayload = encryptPayload(payloadStr);
+
+    StaticJsonDocument<256> finalDoc;
+    finalDoc["p"] = encryptedPayload;
+    finalDoc["c"] = calculateCRC32((const uint8_t*)payloadStr.c_str(), payloadStr.length());
+
+    String msg;
+    serializeJson(finalDoc, msg);
+
+    Serial.printf("[LORA] Sending ACK for msgId %d\n", msgId);
+    if (radio.transmit(msg) == RADIOLIB_ERR_NONE) {
+        saveConfig();
+    } else {
+        msgCounter--;
     }
 }
 
@@ -125,22 +177,64 @@ void LoraNode::sendTelemetry(float temp, float humidity, float voltage, bool pre
         return;
     }
     lastTelemetryTime = millis();
+    msgCounter++;
 
-    Serial.println("Envoi de la télémétrie...");
     StaticJsonDocument<256> doc;
-    JsonObject p = doc.createNestedObject("p");
-    p["type"] = "TELEMETRY";
-    p["nodeId"] = nodeId;
-    
-    JsonObject data = p.createNestedObject("data");
+    doc["type"] = "TELEMETRY";
+    doc["nodeId"] = nodeId;
+    doc["msgCtr"] = msgCounter;
+
+    JsonObject data = doc.createNestedObject("data");
     data["temperature"] = temp;
     data["humidity"] = humidity;
     data["voltage"] = voltage;
     data["pressure_ok"] = pressureOk;
+
+    String payloadStr;
+    serializeJson(doc, payloadStr);
     
-    String payloadStr; serializeJson(p, payloadStr);
-    doc["c"] = calculateCRC32((const uint8_t*)payloadStr.c_str(), payloadStr.length());
-    String msg; serializeJson(doc, msg);
+    String encryptedPayload = encryptPayload(payloadStr);
     
-    radio.transmit(msg);
+    StaticJsonDocument<384> finalDoc;
+    finalDoc["p"] = encryptedPayload;
+    finalDoc["c"] = calculateCRC32((const uint8_t*)payloadStr.c_str(), payloadStr.length());
+
+    String msg;
+    serializeJson(finalDoc, msg);
+
+    Serial.printf("[LORA] Sending TELEMETRY (msgCtr: %u)...\n", msgCounter);
+    if (radio.transmit(msg) == RADIOLIB_ERR_NONE) {
+        saveConfig();
+    } else {
+        msgCounter--;
+    }
+}
+
+String LoraNode::encryptPayload(const String& plaintext) {
+    int plaintextLen = plaintext.length();
+    int paddedLen = (plaintextLen / 16 + 1) * 16;
+    byte pad = paddedLen - plaintextLen;
+
+    byte paddedPlaintext[paddedLen];
+    memcpy(paddedPlaintext, plaintext.c_str(), plaintextLen);
+    for (int i = plaintextLen; i < paddedLen; i++) {
+        paddedPlaintext[i] = pad;
+    }
+
+    aesLib.encrypt(paddedPlaintext, paddedLen, encrypted, aes_key, sizeof(aes_key), aes_iv);
+
+    return Base64::encode(encrypted, paddedLen);
+}
+
+String LoraNode::decryptPayload(const String& b64_ciphertext) {
+    String decoded_string = Base64::decode(b64_ciphertext);
+
+    aesLib.decrypt((byte*)decoded_string.c_str(), decoded_string.length(), decrypted, aes_key, sizeof(aes_key), aes_iv);
+
+    // Supprimer le padding PKCS7
+    int pad = decrypted[decoded_string.length() - 1];
+    if (pad > 0 && pad <= 16) {
+        return String((char*)decrypted).substring(0, decoded_string.length() - pad);
+    }
+    return String((char*)decrypted);
 }

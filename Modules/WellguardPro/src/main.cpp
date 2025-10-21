@@ -1,20 +1,24 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
-#include <WiFiManager.h>
 #include <RadioLib.h>
 #include <DHT.h>
+#include <ArduinoJson.h>
 #include "config.h"
+#include "credentials.h"
 #include "LoraNode.h"
+#include "helpers.h"
+#include "Base64.h"
 
 // ===================== OBJETS GLOBAUX =====================
-SX1262 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
+Module mod(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
+SX1262 radio = &mod;
 LoraNode loraNode;
 DHT dht(DHT_PIN, DHT_TYPE);
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 
-// Structure pour l'état partagé entre les tâches, protégée par un sémaphore
+// Structure pour l'état partagé entre les tâches
 struct SharedState {
     bool pumpOn = false;
     bool pressureOk = false;
@@ -70,52 +74,65 @@ pumpSwitch.addEventListener('change',()=>{ws.send(JSON.stringify({action:'setPum
 // ===================== PROTOTYPES =====================
 void taskLoRa(void* params);
 void taskSensors(void* params);
+void connectWiFi();
 void setupWebServer();
-void setPumpState(bool state, bool fromLora);
+void setPumpState(bool state, bool fromLora = false);
 void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len);
+
 
 void setup() {
     Serial.begin(115200);
     pinMode(PUMP_RELAY_PIN, OUTPUT);
-    digitalWrite(PUMP_RELAY_PIN, LOW); // Sécurité : Pompe éteinte au démarrage
+    digitalWrite(PUMP_RELAY_PIN, LOW);
     pinMode(PRESSURE_SENSOR_PIN, INPUT_PULLUP);
     dht.begin();
     
     stateMutex = xSemaphoreCreateMutex();
 
-    WiFiManager wm;
-    wm.autoConnect("WellguardPro-Setup");
-    Serial.println("WiFi connecté !");
-
+    connectWiFi();
     setupWebServer();
     loraNode.init();
 
-    xTaskCreatePinnedToCore(taskSensors, "Sensors", 4096, NULL, 1, NULL, 0);
-    xTaskCreatePinnedToCore(taskLoRa, "LoRa", 4096, NULL, 1, NULL, 1);
+    BaseType_t taskSensorsStatus = xTaskCreatePinnedToCore(taskSensors, "Sensors", 4096, NULL, 1, NULL, 0);
+    BaseType_t taskLoRaStatus = xTaskCreatePinnedToCore(taskLoRa, "LoRa", 4096, NULL, 1, NULL, 1);
+
+    if (taskSensorsStatus != pdPASS || taskLoRaStatus != pdPASS) {
+        Serial.println("Erreur fatale: Impossible de créer les tâches FreeRTOS !");
+        ESP.restart();
+    }
 }
 
 void loop() { vTaskDelete(NULL); }
 
-// Fonction centrale et sécurisée pour changer l'état de la pompe
-void setPumpState(bool state, bool fromLora = false) {
+void connectWiFi() {
+    Serial.print("Connexion au WiFi...");
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println(" Connecté!");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+}
+
+void setPumpState(bool state, bool fromLora) {
     xSemaphoreTake(stateMutex, portMAX_DELAY);
     sharedState.pumpOn = state;
     digitalWrite(PUMP_RELAY_PIN, state ? HIGH : LOW);
-    SharedState stateCopy = sharedState; // Copie pour l'envoi de notifications
     xSemaphoreGive(stateMutex);
     
     Serial.printf("Pompe mise à %s (source: %s)\n", state ? "ON" : "OFF", fromLora ? "LoRa" : "Web");
     
-    // Notifier immédiatement les clients web de ce changement
     StaticJsonDocument<128> doc;
-    doc["pumpOn"] = stateCopy.pumpOn; // On ne notifie que l'état de la pompe
-    String output; serializeJson(doc, output);
+    doc["pumpOn"] = state;
+    String output;
+    serializeJson(doc, output);
     ws.textAll(output);
 }
 
 void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
     if (type == WS_EVT_CONNECT) {
-        // Envoi de l'état complet au nouveau client
         StaticJsonDocument<128> doc;
         xSemaphoreTake(stateMutex, portMAX_DELAY);
         doc["pumpOn"] = sharedState.pumpOn;
@@ -124,14 +141,14 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
         doc["voltage"] = sharedState.voltage;
         doc["pressureOk"] = sharedState.pressureOk;
         xSemaphoreGive(stateMutex);
-        String output; serializeJson(doc, output);
+        String output;
+        serializeJson(doc, output);
         client->text(output);
     } else if (type == WS_EVT_DATA) {
-        // Traitement de la commande venant du client web
         StaticJsonDocument<64> doc;
         if (deserializeJson(doc, data, len) == DeserializationError::Ok) {
             if (strcmp(doc["action"], "setPump") == 0) {
-                setPumpState(doc["state"]);
+                setPumpState(doc["state"], false);
             }
         }
     }
@@ -152,24 +169,22 @@ void taskSensors(void* params) {
 
         SharedState stateCopy;
         xSemaphoreTake(stateMutex, portMAX_DELAY);
-        // Lire les capteurs et mettre à jour l'état partagé
         sharedState.humidity = dht.readHumidity();
         sharedState.temperature = dht.readTemperature();
         sharedState.pressureOk = (digitalRead(PRESSURE_SENSOR_PIN) == HIGH);
-        sharedState.voltage = analogRead(VOLTAGE_SENSOR_PIN) * (3.3 / 4095.0) * 11.0; // Exemple avec diviseur de tension 10:1
+        sharedState.voltage = analogRead(VOLTAGE_SENSOR_PIN) * (3.3 / 4095.0) * 11.0;
         stateCopy = sharedState;
         xSemaphoreGive(stateMutex);
         
-        // Notifier les clients web de la mise à jour des capteurs
         StaticJsonDocument<128> doc;
         doc["temperature"] = stateCopy.temperature;
         doc["humidity"] = stateCopy.humidity;
         doc["voltage"] = stateCopy.voltage;
         doc["pressureOk"] = stateCopy.pressureOk;
-        String output; serializeJson(doc, output);
+        String output;
+        serializeJson(doc, output);
         ws.textAll(output);
 
-        // Envoyer la télémétrie LoRa (la fonction gère elle-même l'intervalle de temps)
         loraNode.sendTelemetry(stateCopy.temperature, stateCopy.humidity, stateCopy.voltage, stateCopy.pressureOk);
     }
 }
@@ -177,6 +192,6 @@ void taskSensors(void* params) {
 void taskLoRa(void* params) {
     for(;;) {
         loraNode.run();
-        vTaskDelay(pdMS_TO_TICKS(100)); // Courte pause pour laisser du temps aux autres tâches
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }

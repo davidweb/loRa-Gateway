@@ -1,31 +1,47 @@
 #include "LoraNode.h"
 #include "config.h"
+#include "credentials.h"
+#include "helpers.h"
+#include "Base64.h"
 #include <RadioLib.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <AESLib.h>
 
 extern SX1262 radio;
 Preferences preferences;
+AESLib aesLib;
 
-// Fonction de calcul du CRC32 (doit être identique à celle de la passerelle)
-uint32_t calculateCRC32(const uint8_t *data, size_t length); 
+// Tampons pour le chiffrement/déchiffrement
+byte aes_key[16];
+byte aes_iv[16];
+byte encrypted[256];
+byte decrypted[256];
+
 
 void LoraNode::init() {
+    memcpy(aes_key, LORA_SECRET_KEY, 16);
+    memcpy(aes_iv, LORA_AES_IV, 16);
+
     loadConfig();
+
+    Serial.print(F("[LORA] Initializing... "));
     int state = radio.begin(LORA_FREQ);
     if (state != RADIOLIB_ERR_NONE) {
-        Serial.printf("LoRa init failed, code %d\n", state);
+        Serial.printf("failed, code %d\n", state);
         ESP.restart();
     }
+    Serial.println(F("success!"));
 }
 
 void LoraNode::run() {
     if (nodeId == 0) {
-        performJoinRequest();
-        vTaskDelay(pdMS_TO_TICKS(5000)); // Attendre 5s avant de réessayer
+        if (millis() - lastJoinAttempt > 10000) { // Tenter de joindre toutes les 10s
+            lastJoinAttempt = millis();
+            performJoinRequest();
+        }
     }
-    // Si nous sommes joints, la tâche des capteurs déclenchera l'envoi de télémétrie.
 }
 
 bool LoraNode::isJoined() {
@@ -35,82 +51,132 @@ bool LoraNode::isJoined() {
 void LoraNode::loadConfig() {
     preferences.begin(NVS_NAMESPACE, false);
     nodeId = preferences.getUChar("nodeId", 0);
+    msgCounter = preferences.getUInt("msgCtr", 0);
     preferences.end();
-    Serial.printf("Node ID chargé depuis NVS : %d\n", nodeId);
+    Serial.printf("[NVS] Node ID: %d, Msg Counter: %u\n", nodeId, msgCounter);
 }
 
 void LoraNode::saveConfig() {
     preferences.begin(NVS_NAMESPACE, false);
     preferences.putUChar("nodeId", nodeId);
+    preferences.putUInt("msgCtr", msgCounter);
     preferences.end();
-    Serial.printf("Node ID %d sauvegardé en NVS\n", nodeId);
+    Serial.printf("[NVS] Config saved. Node ID: %d, Msg Counter: %u\n", nodeId, msgCounter);
 }
 
 void LoraNode::performJoinRequest() {
-    Serial.println("Envoi de la demande d'adhésion (JOIN_REQUEST)...");
-    StaticJsonDocument<256> doc;
-    JsonObject p = doc.createNestedObject("p");
-    p["type"] = "JOIN_REQUEST";
-    p["mac"] = WiFi.macAddress();
-    p["secret"] = LORA_SECRET_KEY;
-    p["devType"] = DEVICE_TYPE;
-    
-    String payloadStr; serializeJson(p, payloadStr);
-    doc["c"] = calculateCRC32((const uint8_t*)payloadStr.c_str(), payloadStr.length());
-    String msg; serializeJson(doc, msg);
+    Serial.println(F("[LORA] Sending JOIN_REQUEST..."));
 
-    radio.transmit(msg);
+    StaticJsonDocument<200> doc;
+    doc["type"] = "JOIN_REQUEST";
+    doc["mac"] = WiFi.macAddress();
+    doc["devType"] = DEVICE_TYPE;
+    
+    String payloadStr;
+    serializeJson(doc, payloadStr);
+
+    String encryptedPayload = encryptPayload(payloadStr);
+
+    StaticJsonDocument<256> finalDoc;
+    finalDoc["p"] = encryptedPayload;
+    finalDoc["c"] = calculateCRC32((const uint8_t*)payloadStr.c_str(), payloadStr.length());
+
+    String msg;
+    serializeJson(finalDoc, msg);
+
+    int state = radio.transmit(msg);
+    if (state != RADIOLIB_ERR_NONE) {
+        Serial.printf("[LORA] Transmit failed, code %d\n", state);
+        return;
+    }
 
     // Écouter la réponse
     String response;
-    int state = radio.receive(response, 5000); // Écouter pendant 5 secondes
+    state = radio.receive(response, 5000);
     if (state == RADIOLIB_ERR_NONE && response.length() > 0) {
-        StaticJsonDocument<128> rxDoc;
-        deserializeJson(rxDoc, response);
-        // Ici, on ne vérifie pas le CRC pour la simplicité, mais en prod on le ferait
-        if (strcmp(rxDoc["p"]["type"], "JOIN_ACCEPT") == 0) {
-            nodeId = rxDoc["p"]["nodeId"];
-            if(nodeId > 0) {
-                Serial.printf("Adhésion réussie ! Node ID attribué : %d\n", nodeId);
-                saveConfig();
+        StaticJsonDocument<256> rxDoc;
+        if (deserializeJson(rxDoc, response) == DeserializationError::Ok && rxDoc.containsKey("p")) {
+            String decrypted = decryptPayload(rxDoc["p"]);
+            if (decrypted.length() > 0) {
+                StaticJsonDocument<128> joinAcceptDoc;
+                if (deserializeJson(joinAcceptDoc, decrypted) == DeserializationError::Ok &&
+                    joinAcceptDoc["type"] == "JOIN_ACCEPT") {
+
+                    nodeId = joinAcceptDoc["nodeId"];
+                    if (nodeId > 0) {
+                        msgCounter = 0; // Réinitialiser le compteur après un join réussi
+                        saveConfig();
+                        Serial.printf("[LORA] Join successful! Assigned Node ID: %d\n", nodeId);
+                    }
+                }
             }
         }
     } else {
-        Serial.println("Pas de réponse à la demande d'adhésion.");
+        Serial.println(F("[LORA] No response to JOIN_REQUEST."));
     }
 }
 
 void LoraNode::sendTelemetry(bool isFull) {
     if (!isJoined()) return;
 
-    Serial.printf("Envoi de la télémétrie : isFull = %d\n", isFull);
+    msgCounter++; // Incrémenter avant l'envoi
+
     StaticJsonDocument<256> doc;
-    JsonObject p = doc.createNestedObject("p");
-    p["type"] = "TELEMETRY";
-    p["nodeId"] = nodeId;
-    
-    JsonObject data = p.createNestedObject("data");
+    doc["type"] = "TELEMETRY";
+    doc["nodeId"] = nodeId;
+    doc["msgCtr"] = msgCounter;
+
+    JsonObject data = doc.createNestedObject("data");
     data["level_full"] = isFull;
-    data["voltage"] = 3.3; // Exemple de valeur statique
+    data["voltage"] = 3.3; // Valeur statique pour l'exemple
+
+    String payloadStr;
+    serializeJson(doc, payloadStr);
     
-    String payloadStr; serializeJson(p, payloadStr);
-    doc["c"] = calculateCRC32((const uint8_t*)payloadStr.c_str(), payloadStr.length());
-    String msg; serializeJson(doc, msg);
+    String encryptedPayload = encryptPayload(payloadStr);
     
-    radio.transmit(msg);
+    StaticJsonDocument<384> finalDoc;
+    finalDoc["p"] = encryptedPayload;
+    finalDoc["c"] = calculateCRC32((const uint8_t*)payloadStr.c_str(), payloadStr.length());
+
+    String msg;
+    serializeJson(finalDoc, msg);
+
+    Serial.printf("[LORA] Sending TELEMETRY (msgCtr: %u)...\n", msgCounter);
+    int state = radio.transmit(msg);
+    if (state != RADIOLIB_ERR_NONE) {
+        Serial.printf("[LORA] Transmit failed, code %d\n", state);
+        msgCounter--; // Annuler l'incrémentation si l'envoi échoue
+    } else {
+        saveConfig(); // Sauvegarder le nouveau compteur après un envoi réussi
+    }
 }
 
-// Dupliquer la fonction CRC32 de la passerelle ici
-uint32_t calculateCRC32(const uint8_t *data, size_t length) {
-    uint32_t crc = 0xffffffff;
-    while (length--) {
-        uint8_t c = *data++;
-        for (uint32_t i = 0x80; i > 0; i >>= 1) {
-            bool bit = crc & 0x80000000;
-            if (c & i) { bit = !bit; }
-            crc <<= 1;
-            if (bit) { crc ^= 0x04c11db7; }
-        }
+String LoraNode::encryptPayload(const String& plaintext) {
+    int plaintextLen = plaintext.length();
+    int paddedLen = (plaintextLen / 16 + 1) * 16;
+    byte pad = paddedLen - plaintextLen;
+
+    byte paddedPlaintext[paddedLen];
+    memcpy(paddedPlaintext, plaintext.c_str(), plaintextLen);
+    for (int i = plaintextLen; i < paddedLen; i++) {
+        paddedPlaintext[i] = pad;
     }
-    return crc;
+
+    aesLib.encrypt(paddedPlaintext, paddedLen, encrypted, aes_key, sizeof(aes_key), aes_iv);
+
+    return Base64::encode(encrypted, paddedLen);
+}
+
+String LoraNode::decryptPayload(const String& b64_ciphertext) {
+    String decoded_string = Base64::decode(b64_ciphertext);
+
+    aesLib.decrypt((byte*)decoded_string.c_str(), decoded_string.length(), decrypted, aes_key, sizeof(aes_key), aes_iv);
+
+    // Supprimer le padding PKCS7
+    int pad = decrypted[decoded_string.length() - 1];
+    if (pad > 0 && pad <= 16) {
+        return String((char*)decrypted).substring(0, decoded_string.length() - pad);
+    }
+    return String((char*)decrypted);
 }
