@@ -28,10 +28,10 @@ jobs:
           key: ${{ runner.os }}-pio
 
       - name: Set up PlatformIO Core
-        uses: platformio/action-core@v1
+        # === CORRECTION APPLIQUÉE ICI ===
+        uses: platformio/action-core@v3
 
       - name: Build Gateway Firmware
-        # LA CLÉ EST ICI: On spécifie le répertoire de travail
         working-directory: ./gateway
         run: pio run
 
@@ -61,7 +61,8 @@ jobs:
           path: ~/.platformio/
           key: ${{ runner.os }}-pio
       - name: Set up PlatformIO Core
-        uses: platformio/action-core@v1
+        # === CORRECTION APPLIQUÉE ICI ===
+        uses: platformio/action-core@v3
 
       - name: Build AquaReservPro Firmware
         working-directory: ./modules/AquaReservPro
@@ -93,7 +94,8 @@ jobs:
           path: ~/.platformio/
           key: ${{ runner.os }}-pio
       - name: Set up PlatformIO Core
-        uses: platformio/action-core@v1
+        # === CORRECTION APPLIQUÉE ICI ===
+        uses: platformio/action-core@v3
 
       - name: Build WellguardPro Firmware
         working-directory: ./modules/WellguardPro
