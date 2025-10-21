@@ -1,0 +1,16 @@
+name: Runner and Actions Test
+
+on:
+  workflow_dispatch: # Déclenchement manuel uniquement
+
+jobs:
+  test-job:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Step 1 - Can we checkout code?
+        uses: actions/checkout@v4
+
+      - name: Step 2 - Can we run a simple command?
+        run: |
+          echo "Hello from the runner!"
+          ls -la
