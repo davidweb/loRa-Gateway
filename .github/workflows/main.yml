@@ -3,8 +3,10 @@ name: Build and Attach Release Firmware
 
 # Déclencheurs
 on:
+  # Se déclenche lors de la publication d'une nouvelle Release
   release:
     types: [published]
+  # Permet un déclenchement manuel depuis l'onglet "Actions" pour les tests
   workflow_dispatch:
 
 # Tâches à exécuter
@@ -27,7 +29,7 @@ jobs:
           key: ${{ runner.os }}-pio
 
       - name: Set up PlatformIO
-        # MISE À JOUR : Utilisation de l'action la plus récente et officielle
+        # Utilisation de l'action la plus récente et officielle de PlatformIO
         uses: platformio/platformio-action@v5
 
       - name: Build Gateway Firmware
@@ -36,10 +38,10 @@ jobs:
 
       - name: Prepare Gateway Firmware File
         run: |
-          RELEASE_TAG="${{ github.ref_name || 'manual' }}"
+          RELEASE_TAG="${{ github.ref_name || 'manual-build' }}"
           mv ./gateway/.pio/build/heltec_wifi_lora_32_v3/firmware.bin "Gateway-Firmware-${RELEASE_TAG}.bin"
 
-      - name: Upload Artifact
+      - name: Upload Gateway Artifact
         uses: actions/upload-artifact@v4
         with:
           name: gateway-firmware
@@ -69,10 +71,10 @@ jobs:
 
       - name: Prepare AquaReservPro Firmware File
         run: |
-          RELEASE_TAG="${{ github.ref_name || 'manual' }}"
+          RELEASE_TAG="${{ github.ref_name || 'manual-build' }}"
           mv ./modules/AquaReservPro/.pio/build/heltec_wifi_lora_32_v3/firmware.bin "AquaReservPro-Firmware-${RELEASE_TAG}.bin"
       
-      - name: Upload Artifact
+      - name: Upload AquaReservPro Artifact
         uses: actions/upload-artifact@v4
         with:
           name: aquareserv-firmware
@@ -102,10 +104,10 @@ jobs:
 
       - name: Prepare WellguardPro Firmware File
         run: |
-          RELEASE_TAG="${{ github.ref_name || 'manual' }}"
+          RELEASE_TAG="${{ github.ref_name || 'manual-build' }}"
           mv ./modules/WellguardPro/.pio/build/heltec_wifi_lora_32_v3/firmware.bin "WellguardPro-Firmware-${RELEASE_TAG}.bin"
 
-      - name: Upload Artifact
+      - name: Upload WellguardPro Artifact
         uses: actions/upload-artifact@v4
         with:
           name: wellguard-firmware
@@ -126,7 +128,7 @@ jobs:
         uses: actions/download-artifact@v4
         
       - name: Upload all firmware to Release
-        # MISE À JOUR: Utilisation de la dernière version de l'action de release
+        # Utilisation de la dernière version de l'action de release
         uses: softprops/action-gh-release@v2
         with:
           # Cherche dans tous les sous-dossiers d'artifacts et uploade tous les .bin
