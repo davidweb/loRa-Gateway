@@ -3,60 +3,44 @@ name: Build and Attach Release Firmware
 
 # Déclencheurs
 on:
-  # Se déclenche lors de la publication d'une nouvelle Release
   release:
     types: [published]
-  # Permet un déclenchement manuel depuis l'onglet "Actions" pour les tests
   workflow_dispatch:
 
 # Tâches à exécuter
 jobs:
-  # =======================================================
   # JOB 1: Compiler la Passerelle (Gateway)
-  # =======================================================
   build-gateway:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }}
-
       - name: Cache PlatformIO dependencies
         uses: actions/cache@v3
         with:
           path: ~/.platformio/
           key: ${{ runner.os }}-pio
-
       - name: Set up PlatformIO
-        # Utilisation de l'action la plus récente et officielle de PlatformIO
         uses: platformio/platformio-action@v5
-
       - name: Build Gateway Firmware
         working-directory: ./gateway
         run: pio run
-
       - name: Prepare Gateway Firmware File
         run: |
           RELEASE_TAG="${{ github.ref_name || 'manual-build' }}"
           mv ./gateway/.pio/build/heltec_wifi_lora_32_v3/firmware.bin "Gateway-Firmware-${RELEASE_TAG}.bin"
-
       - name: Upload Gateway Artifact
         uses: actions/upload-artifact@v4
         with:
           name: gateway-firmware
           path: Gateway-Firmware-*.bin
 
-  # =======================================================
   # JOB 2: Compiler le module AquaReservPro
-  # =======================================================
   build-aquareserv:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }}
       - name: Cache PlatformIO dependencies
         uses: actions/cache@v3
         with:
@@ -64,32 +48,25 @@ jobs:
           key: ${{ runner.os }}-pio
       - name: Set up PlatformIO
         uses: platformio/platformio-action@v5
-
       - name: Build AquaReservPro Firmware
         working-directory: ./modules/AquaReservPro
         run: pio run
-
       - name: Prepare AquaReservPro Firmware File
         run: |
           RELEASE_TAG="${{ github.ref_name || 'manual-build' }}"
           mv ./modules/AquaReservPro/.pio/build/heltec_wifi_lora_32_v3/firmware.bin "AquaReservPro-Firmware-${RELEASE_TAG}.bin"
-      
       - name: Upload AquaReservPro Artifact
         uses: actions/upload-artifact@v4
         with:
           name: aquareserv-firmware
           path: AquaReservPro-Firmware-*.bin
 
-  # =======================================================
   # JOB 3: Compiler le module WellguardPro
-  # =======================================================
   build-wellguard:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }}
       - name: Cache PlatformIO dependencies
         uses: actions/cache@v3
         with:
@@ -97,41 +74,30 @@ jobs:
           key: ${{ runner.os }}-pio
       - name: Set up PlatformIO
         uses: platformio/platformio-action@v5
-
       - name: Build WellguardPro Firmware
         working-directory: ./modules/WellguardPro
         run: pio run
-
       - name: Prepare WellguardPro Firmware File
         run: |
           RELEASE_TAG="${{ github.ref_name || 'manual-build' }}"
           mv ./modules/WellguardPro/.pio/build/heltec_wifi_lora_32_v3/firmware.bin "WellguardPro-Firmware-${RELEASE_TAG}.bin"
-
       - name: Upload WellguardPro Artifact
         uses: actions/upload-artifact@v4
         with:
           name: wellguard-firmware
           path: WellguardPro-Firmware-*.bin
           
-  # =======================================================
   # JOB 4: Publier les firmwares sur la Release
-  # =======================================================
   publish-release:
-    # Ce job ne s'exécute que si les 3 jobs de build ont réussi
     needs: [build-gateway, build-aquareserv, build-wellguard]
     runs-on: ubuntu-latest
-    # Condition: ne s'exécute que pour un événement de release, pas pour un build manuel
     if: github.event_name == 'release'
-
     steps:
       - name: Download all firmware artifacts
         uses: actions/download-artifact@v4
-        
       - name: Upload all firmware to Release
-        # Utilisation de la dernière version de l'action de release
         uses: softprops/action-gh-release@v2
         with:
-          # Cherche dans tous les sous-dossiers d'artifacts et uploade tous les .bin
           files: |
             gateway-firmware/*.bin
             aquareserv-firmware/*.bin
