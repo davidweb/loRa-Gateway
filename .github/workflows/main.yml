@@ -1,52 +1,110 @@
 # Nom du workflow
 name: Build and Attach Release Firmware
 
-# Déclencheur : s'exécute UNIQUEMENT quand une "Release" est publiée sur GitHub
+# Déclencheur : s'exécute quand une "Release" est publiée
 on:
   release:
     types: [published]
+  # Ajout du déclencheur manuel pour plus de flexibilité
+  workflow_dispatch:
 
 # Tâches à exécuter
 jobs:
-  build-and-upload:
-    # Utiliser la dernière version d'Ubuntu
+  # =======================================================
+  # JOB 1: Compiler la Passerelle (Gateway)
+  # =======================================================
+  build-gateway:
     runs-on: ubuntu-latest
-
     steps:
-      # Étape 1: Récupérer le code source de la release
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # 'github.ref' correspond à la référence du tag de la release (ex: v1.1.0-stable)
           ref: ${{ github.ref }}
 
-      # Étape 2: Mettre en cache les dépendances pour accélérer les futurs builds
       - name: Cache PlatformIO dependencies
         uses: actions/cache@v3
         with:
           path: ~/.platformio/
           key: ${{ runner.os }}-pio
 
-      # Étape 3: Installer PlatformIO Core
       - name: Set up PlatformIO Core
         uses: platformio/action-core@v1
 
-      # Étape 4: Compiler le projet pour notre carte
-      - name: Build the project
-        run: pio run -e heltec_wifi_lora_32_v3
+      - name: Build Gateway Firmware
+        # LA CLÉ EST ICI: On spécifie le répertoire de travail
+        working-directory: ./gateway
+        run: pio run
 
-      # Étape 5: Préparer le fichier pour l'upload
-      # Renomme le firmware.bin avec un nom de version unique pour éviter les conflits
-      - name: Prepare firmware file
+      - name: Prepare Gateway Firmware File
         run: |
-          FIRMWARE_PATH=".pio/build/heltec_wifi_lora_32_v3/firmware.bin"
           RELEASE_TAG="${{ github.ref_name }}"
-          mv $FIRMWARE_PATH "Gateway-Firmware-${RELEASE_TAG}.bin"
-        
-      # Étape 6: Attacher le firmware compilé à la page de la Release
-      # C'est l'étape magique !
-      - name: Upload Firmware to Release
+          mv ./gateway/.pio/build/heltec_wifi_lora_32_v3/firmware.bin "Gateway-Firmware-${RELEASE_TAG}.bin"
+
+      - name: Upload Gateway Firmware to Release
         uses: softprops/action-gh-release@v1
         with:
-          # Le fichier à attacher. Le '*' est un joker.
           files: Gateway-Firmware-*.bin
+
+  # =======================================================
+  # JOB 2: Compiler le module AquaReservPro
+  # =======================================================
+  build-aquareserv:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - name: Cache PlatformIO dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.platformio/
+          key: ${{ runner.os }}-pio
+      - name: Set up PlatformIO Core
+        uses: platformio/action-core@v1
+
+      - name: Build AquaReservPro Firmware
+        working-directory: ./modules/AquaReservPro
+        run: pio run
+
+      - name: Prepare AquaReservPro Firmware File
+        run: |
+          RELEASE_TAG="${{ github.ref_name }}"
+          mv ./modules/AquaReservPro/.pio/build/heltec_wifi_lora_32_v3/firmware.bin "AquaReservPro-Firmware-${RELEASE_TAG}.bin"
+
+      - name: Upload AquaReservPro Firmware to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: AquaReservPro-Firmware-*.bin
+
+  # =======================================================
+  # JOB 3: Compiler le module WellguardPro
+  # =======================================================
+  build-wellguard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - name: Cache PlatformIO dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.platformio/
+          key: ${{ runner.os }}-pio
+      - name: Set up PlatformIO Core
+        uses: platformio/action-core@v1
+
+      - name: Build WellguardPro Firmware
+        working-directory: ./modules/WellguardPro
+        run: pio run
+
+      - name: Prepare WellguardPro Firmware File
+        run: |
+          RELEASE_TAG="${{ github.ref_name }}"
+          mv ./modules/WellguardPro/.pio/build/heltec_wifi_lora_32_v3/firmware.bin "WellguardPro-Firmware-${RELEASE_TAG}.bin"
+
+      - name: Upload WellguardPro Firmware to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: WellguardPro-Firmware-*.bin
