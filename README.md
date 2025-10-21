@@ -1,4 +1,4 @@
-# Industrial-Grade LoRaWAN Gateway for ThingsBoard
+# LoRaWAN Gateway for ThingsBoard
 
 ## Overview
 
